@@ -1,0 +1,167 @@
+---
+title: "Coursera Practical Machine Learning Course Project"
+author: "Elizabeth Lundeen"
+date: "2022-10-14"
+output: github_document
+---
+
+# Background
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset). 
+
+## Data 
+The training data for this project are available here: 
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har. 
+
+## Project Aim
+The goal of your project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. You may use any of the other variables to predict with. You should create a report describing how you built your model, how you used cross validation, what you think the expected out of sample error is, and why you made the choices you did. You will also use your prediction model to predict 20 different test cases. 
+
+## Load the Data
+
+```{r}
+library(caret)
+library(rpart)
+library(data.table)
+library(rattle)
+library(randomForest)
+
+####Load the data
+training <- read.csv("C:/Users/yxj4/OneDrive - CDC/+My_Documents/CDC/1 DDT/Data Modernization/Coursera/Hopkins Data Science Specialization/8 Practical Machine Learning/3 Course Project/pml-training.csv")
+#19622 obs. 160 variables
+
+testing <- read.csv("C:/Users/yxj4/OneDrive - CDC/+My_Documents/CDC/1 DDT/Data Modernization/Coursera/Hopkins Data Science Specialization/8 Practical Machine Learning/3 Course Project/pml-testing.csv")
+#20 obs. of  160 variables
+```
+
+# Step 1: Slice Training Data into a Smaller Training Set and a Validation Set (For Out-of-Sample Error Estimation)
+```{r}
+set.seed(37501)
+inTrain <- createDataPartition(y=training$classe, p=0.7, list=FALSE)
+train <- training[inTrain, ]
+validate <- training[-inTrain, ]
+```
+
+
+# Step 2: Data Preparation and Feature Engineering
+
+## Remove features that are not useful for this classification problem, such as the participant's name, the time stamp, and X (subject ID).
+
+```{r}
+#Remove the subject's name and time stamp as these aren't useful predictors
+train2 <- subset(train, select = -c(X, user_name, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp))
+validate2 <- subset(validate, select = -c(X, user_name, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp))
+```
+
+## Deal with the problem of missing data.
+
+Most machine learning algorithms are not able to handle missing data. I cannot impute missing predictor variables (features) using k nearest neighbors because the data contain a mixture of continuous and categorical data (k nearest neighbors can only handle continuous data). I tried using the R package missForest, which uses Random Forest techniques to impute missing data (because it can handle mixed type data frames). However, this did not work because missForest requires that all columns are either factor or numeric. I converted all of the character variables to factor, but missForest cannot handle categorical predictors with more than 53 categories. Therefore, I ended up deciding just to eliminate variables/features that had 95% missing data or more.
+
+
+```{r}
+dim(train2)
+dim(validate2)
+fewmissing <- colSums(is.na(train2))/nrow(train2) < 0.95
+train3 <- train2[,fewmissing]
+validate3 <- validate2[,fewmissing]
+dim(train3)
+dim(validate3)
+```
+
+
+## Near Zero Variance Variables 
+
+Remove near zero variance variables because they will not contribute much to the prediction.
+
+```{r}
+nzv <- nearZeroVar(train3)
+train4 <- train3[, -nzv]
+validate4 <- validate3[, -nzv]
+```
+
+```{r}
+rm(train,train2,train3,training,validate,validate2,validate3,fewmissing,nzv,inTrain)
+```
+
+## Classe should be a factor variable.
+
+Convert *classe* to a factor variable in both the training and validation data sets.
+
+```{r}
+train4$classe <- as.factor(train4$classe)
+validate4$classe <- as.factor(validate4$classe)
+```
+
+
+# Step 3: Model Building
+
+From the lecture materials, we know that random forest and boosting are the machine learning techniques that provide the greatest accuracy for prediction/classification problems. Therefore, I will first use a random forest model and assess performance and accuracy in prediction. I am instructing train to use 3-fold cross validation to select optimal tuning parameters.
+
+```{r}
+modFit <- train(classe ~ ., data=train4, method="rf", prox=TRUE, trControl = trainControl(method="cv",number=3))
+print(modFit)
+
+#Print the final model to examine chosen tuning parameters/features
+modFit$finalModel
+
+plot(modFit)
+
+```
+This output shows that the random forest model decided to use 500 trees and tried 27 variables at each split. Accuracy was 0.9951227 (out-of-bag estimate of error rate: 0.22%).
+
+# Step 4: Model Evaluation and Selection
+
+The next step is to use the fitted model to predict *classe* in the validation data set, and produce a confusion matrix to compare the predicted *classe* versus the actual *classe*.
+
+```{r}
+predictions <- predict(modFit, newdata=validate4)
+cm <- confusionMatrix(predictions,validate4$classe)
+cm
+accuracy <- postResample(predictions, validate4$classe)
+accuracy
+oose <- 1 - as.numeric(confusionMatrix(validate4$classe, predictions)$overall[1])
+oose
+```
+The accuracy is 99.73%, meaning the out-of-sample error is 0.27%. This is a very high rate of accuracy, so I will most likely select random forest as the classification algorithm of choice to predict on the test set.
+
+
+# Step 5: Determine if a Higher Degree of Accuracy is Obtained with Boosting
+
+```{r}
+modFit2 <- train(classe ~ ., method="gbm",data=train4,verbose=FALSE, trControl = trainControl(method="cv",number=3))
+print(modFit2)
+
+#Print the final model to examine chosen tuning parameters/features
+modFit2$finalModel
+
+plot(modFit2)
+
+predictions2 <- predict(modFit2, newdata=validate4)
+cm2 <- confusionMatrix(predictions2,validate4$classe)
+cm2
+accuracy2 <- postResample(predictions2, validate4$classe)
+accuracy2
+oose2 <- 1 - as.numeric(confusionMatrix(validate4$classe, predictions2)$overall[1])
+oose2
+```
+
+The accuracy is 98.73%, meaning the out-of-sample error is 1.27%. 
+
+
+# Step 6: Chose the Final Model
+Boosting provided a lower accuracy and higher error rate than what was obtained through random forest models, so I will choose random forest as the final model.
+
+
+# Step 7: Apply the Final Model to Create Predictions for the Test Set (n=20)
+
+```{r}
+Results <- predict(modFit, newdata=testing)
+Results
+```
+
+
+
+
